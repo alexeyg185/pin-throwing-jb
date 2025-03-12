@@ -2,9 +2,9 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Pin Throwing Game - Multiple Tools</title>
+  <title>Pin Throwing Game - Mobile Controls</title>
   <style>
-    /* Fill the entire browser window */
+    /* Fill the entire browser window, hiding overflow if scaled bigger */
     html, body {
       margin: 0;
       padding: 0;
@@ -13,64 +13,115 @@
       background: #222;
       color: #fff;
       font-family: sans-serif;
-      overflow: hidden;  /* Hide overflow, especially if scaled larger */
+      overflow: hidden;
     }
 
     /* Container for scoreboard + canvas. We'll scale this to fit. */
     #gameContainer {
       position: relative;
-      width: 883px;   /* Natural width for the building */
-      height: 1250px; /* ~1200 for building + ~50 for scoreboard area */
+      width: 883px;    /* Building natural width */
+      height: 1250px;  /* 1200 building height + ~50 for scoreboard area */
       transform-origin: top left;
     }
 
-    /* Info & scoreboard inside container */
+    /* Scoreboard, info text, instructions */
     #infoBoard {
       margin: 10px 0 5px 0;
       font-size: 20px;
       color: #0f0;
       text-align: center;
     }
+
     #scoreBoard {
       margin-bottom: 10px;
       font-size: 24px;
       text-align: center;
     }
+
+    #controlInstructions {
+      text-align: center;
+      margin: 5px;
+      color: #ff0;
+    }
+
+    /* Main game canvas */
     canvas {
       display: block;
       margin: 0 auto;
       border: 1px solid #666;
       background: #000; /* fallback if building doesn't load */
     }
+
+    /* Simple mobile/touch controls container */
+    #mobileControls {
+      position: absolute;
+      bottom: 10px;
+      left: 0;
+      width: 100%;
+      text-align: center;
+    }
+
+    /* Buttons for mobile controls */
+    .ctrl-btn {
+      display: inline-block;
+      margin: 0 10px;
+      padding: 10px 15px;
+      font-size: 16px;
+      color: #fff;
+      background: #444;
+      border: 2px solid #888;
+      border-radius: 8px;
+      cursor: pointer;
+      user-select: none; /* Prevent text highlight on tap */
+    }
+
+    .ctrl-btn:active {
+      background: #666;
+    }
   </style>
 </head>
 <body>
 
   <div id="gameContainer">
+    <!-- Info boards and instructions -->
     <div id="infoBoard"></div>
     <div id="scoreBoard"></div>
+    <div id="controlInstructions">
+      Controls: Left/Right arrows move JB.
+      Down arrow throws a pin; Up arrow activates (crashes) a pin.
+    </div>
+
+    <!-- Game canvas -->
     <canvas id="gameCanvas"></canvas>
+
+    <!-- Mobile/touch controls -->
+    <div id="mobileControls">
+      <button class="ctrl-btn" data-key="ArrowLeft">Left</button>
+      <button class="ctrl-btn" data-key="ArrowRight">Right</button>
+      <button class="ctrl-btn" data-key="ArrowDown">Throw</button>
+      <button class="ctrl-btn" data-key="ArrowUp">Activate</button>
+    </div>
   </div>
 
   <script>
     // --------------------------------------------------
-    // 1. Constants & Configuration
+    // 1) Basic Constants & Config
     // --------------------------------------------------
     const BUILDING_WIDTH = 883;
     const BUILDING_HEIGHT = 1200;
-    // We'll reserve ~50 px for scoreboard, total 1250 in #gameContainer CSS.
+    // We'll assume ~50px overhead for scoreboard, so total container height ~1250.
 
-    const SCALE = 0.25;           
-    const ROOF_Y = 114;          
+    const SCALE = 0.25;           // For JB, tool, fire
+    const ROOF_Y = 114;          // The roof line in building_pixeled.png
     const JB_SPEED = 5;          
     const TOOL_FALL_SPEED = 5;   
     const TOOL_ROT_SPEED = 0.15; 
     const JB_JUMP_OFFSET = 5;    
-    const GAME_OVER_DELAY = 5000; // 5s delay before new session
+    const GAME_OVER_DELAY = 5000; // 5s before new session
 
-    const CRASH_EFFECT_DURATION = 1500; // 1.5s crash animation
+    const CRASH_EFFECT_DURATION = 1500; // 1.5s for crash animation
 
-    // Rooms & scoring
+    // Rooms for scoring
     const rooms = [
       // Floor 1 (y: 778..950)
       { name: 'Brain', points: 20, x1: 72,  x2: 450, y1: 778, y2: 950 },
@@ -90,16 +141,16 @@
     ];
 
     // --------------------------------------------------
-    // 2. DOM Elements
+    // 2) DOM Elements
     // --------------------------------------------------
     const gameContainer = document.getElementById('gameContainer');
-    const infoBoard  = document.getElementById('infoBoard');
+    const infoBoard = document.getElementById('infoBoard');
     const scoreBoard = document.getElementById('scoreBoard');
-    const canvas     = document.getElementById('gameCanvas');
-    const ctx        = canvas.getContext('2d');
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
 
     // --------------------------------------------------
-    // 3. Media Assets
+    // 3) Media Assets (Images & Sounds)
     // --------------------------------------------------
     const buildingImg = new Image();
     buildingImg.src = 'resources/building_pixeled.png';
@@ -113,14 +164,14 @@
     const fireImg = new Image();
     fireImg.src = 'resources/fire.png';
 
-    // Audio
+    // Sounds
     const startSound      = new Audio('resources/gamestart.mp3');
     const whooshSound     = new Audio('resources/whoosh.mp3');
     const gameOverSound   = new Audio('resources/game-over.mp3');
     const coinReceivedSnd = new Audio('resources/coin-recieved.mp3');
 
     // --------------------------------------------------
-    // 4. Game State
+    // 4) Game State
     // --------------------------------------------------
     let score = 0;
     let gameActive = false;
@@ -131,67 +182,101 @@
     let jbWidth = 0;
     let jbHeight = 0;
 
-    // Tools array (since multiple can exist)
-    // Each tool: { x, y, width, height, rotation, crash:bool, crashTime, etc. }
+    // Tools (for multiple pins)
+    // Each tool: { x, y, width, height, rotation, falling:boolean }
     let tools = [];
 
-    // Crash effect array (since multiple can appear)
-    // Each effect: { x, y, width, height, endTime }
+    // Crash Effects
+    // Each: { x, y, width, height, endTime }
     let crashEffects = [];
 
-    // Keyboard
+    // Keyboard state
     const keys = {};
 
     // --------------------------------------------------
-    // 5. Input Events
+    // 5) Keyboard & Touch Events
     // --------------------------------------------------
-    // Down arrow => create new tool
-    // Up arrow => crash the oldest uncrashed tool
+    // Standard keyboard approach
     document.addEventListener('keydown', (e) => {
       keys[e.code] = true;
-
-      if (!gameActive) return; // no controls if not active
-
-      if (e.code === 'ArrowDown') {
-        createNewTool();
-      } 
-      else if (e.code === 'ArrowUp') {
-        crashOldestTool();
-      }
+      handleKeyDown(e.code);
     });
     document.addEventListener('keyup', (e) => {
       keys[e.code] = false;
+      // (We don't necessarily need special logic on keyup for this game,
+      //  but we keep track in case you want continuous movement.)
     });
 
-    // Window resize => re-scale
-    window.addEventListener('resize', scaleToFit);
-    window.addEventListener('load', scaleToFit);
+    // Mobile/touch buttons
+    const mobileButtons = document.querySelectorAll('#mobileControls .ctrl-btn');
+    mobileButtons.forEach((btn) => {
+      const code = btn.getAttribute('data-key');
 
-    // --------------------------------------------------
-    // 6. Loading Flow
-    // --------------------------------------------------
-    let assetsLoaded = 0;
-    function checkAllAssetsLoaded() {
-      assetsLoaded++;
-      if (assetsLoaded === 4) { // building, jb, tool, fire
-        initGameCanvas();
-        startGame(); // Start first session
+      // Touch/mouse down => simulate keydown
+      btn.addEventListener('mousedown', () => simulateKeyDown(code));
+      btn.addEventListener('touchstart', (ev) => {
+        ev.preventDefault();
+        simulateKeyDown(code);
+      });
+
+      // Touch/mouse up => simulate keyup
+      btn.addEventListener('mouseup', () => simulateKeyUp(code));
+      btn.addEventListener('touchend', (ev) => {
+        ev.preventDefault();
+        simulateKeyUp(code);
+      });
+    });
+
+    function simulateKeyDown(code) {
+      keys[code] = true;
+      handleKeyDown(code);
+    }
+    function simulateKeyUp(code) {
+      keys[code] = false;
+    }
+
+    // Main key logic for Down/Up
+    function handleKeyDown(code) {
+      if (!gameActive) return;
+
+      if (code === 'ArrowDown') {
+        createNewTool();
+      }
+      else if (code === 'ArrowUp') {
+        crashOldestTool();
       }
     }
-    buildingImg.onload = checkAllAssetsLoaded;
-    jbImg.onload       = checkAllAssetsLoaded;
-    toolImg.onload     = checkAllAssetsLoaded;
-    fireImg.onload     = checkAllAssetsLoaded;
 
     // --------------------------------------------------
-    // 7. Setup
+    // 6) Asset Loading
+    // --------------------------------------------------
+    let assetsLoaded = 0;
+    function onAssetLoad() {
+      assetsLoaded++;
+      if (assetsLoaded === 4) {
+        // buildingImg, jbImg, toolImg, fireImg are loaded
+        initGameCanvas();
+        startGame();
+      }
+    }
+    buildingImg.onload = onAssetLoad;
+    jbImg.onload       = onAssetLoad;
+    toolImg.onload     = onAssetLoad;
+    fireImg.onload     = onAssetLoad;
+
+    // --------------------------------------------------
+    // 7) Setup Canvas & Start
     // --------------------------------------------------
     function initGameCanvas() {
+      // Canvas matches building size
       canvas.width  = BUILDING_WIDTH;
       canvas.height = BUILDING_HEIGHT;
 
       jbWidth  = jbImg.naturalWidth  * SCALE;
       jbHeight = jbImg.naturalHeight * SCALE;
+
+      // Kick off the main loop
+      requestAnimationFrame(update);
     }
 
     function startGame() {
@@ -200,15 +285,14 @@
       scoreBoard.textContent = 'Score: 0';
       infoBoard.textContent  = 'Welcome to the Pin Throwing Game!';
 
-      // Start sound
       startSound.currentTime = 0;
       startSound.play();
 
-      // JB on roof
+      // JB on the roof
       jbX = (canvas.width - jbWidth) / 2;
       jbY = ROOF_Y - jbHeight;
 
-      // Clear any existing tools/effects
+      // Clear out tools & effects
       tools = [];
       crashEffects = [];
     }
@@ -220,53 +304,42 @@
     }
 
     // --------------------------------------------------
-    // 8. Creating & Crashing Tools
+    // 8) Creating & Crashing Tools
     // --------------------------------------------------
     function createNewTool() {
-      // "Whoosh" + JB tiny jump
+      // "whoosh" + JB tiny jump
       whooshSound.currentTime = 0;
       whooshSound.play();
-      jbY -= JB_JUMP_OFFSET;
-      setTimeout(() => {
-        jbY += JB_JUMP_OFFSET;
-      }, 100);
 
-      // Make a new tool
+      jbY -= JB_JUMP_OFFSET;
+      setTimeout(() => { jbY += JB_JUMP_OFFSET; }, 100);
+
       const tw = toolImg.naturalWidth  * SCALE;
       const th = toolImg.naturalHeight * SCALE;
-
       let newTool = {
-        x: jbX + (jbWidth  / 2) - (tw / 2),
+        x: jbX + (jbWidth / 2) - (tw / 2),
         y: jbY + jbHeight - th * 0.2,
         width: tw,
         height: th,
         rotation: 0,
-        falling: true // it's thrown immediately
+        falling: true
       };
       tools.push(newTool);
     }
 
     /**
-     * Crash the oldest uncrashed (still falling) tool (FIFO).
-     * If none are currently falling, do nothing.
+     * Crash the oldest tool that is still falling (FIFO).
      */
     function crashOldestTool() {
-      // Find the first falling tool
-      const toolIndex = tools.findIndex(t => t.falling);
-      if (toolIndex === -1) {
-        // No tool is falling -> do nothing
-        return;
-      }
-      // Crash that tool
-      crashTool(toolIndex);
+      const idx = tools.findIndex(t => t.falling);
+      if (idx === -1) return; // No falling tools
+
+      crashTool(idx);
     }
 
-    /**
-     * Crash a tool at its current bottom-center.
-     */
-    function crashTool(toolIndex) {
-      let tool = tools[toolIndex];
-      // "Bottom center" of the tool
+    function crashTool(index) {
+      const tool = tools[index];
+      // bottom-center
       const crashX = tool.x + (tool.width / 2);
       const crashY = tool.y + tool.height;
 
@@ -274,52 +347,52 @@
       showCrashEffect(crashX, crashY);
 
       // Check if it hits a room
-      let roomHit = rooms.find(rm =>
+      const roomHit = rooms.find(rm =>
         crashX >= rm.x1 && crashX <= rm.x2 &&
         crashY >= rm.y1 && crashY <= rm.y2
       );
 
       if (roomHit) {
-        // Score points
         score += roomHit.points;
         scoreBoard.textContent = `Score: ${score} (+${roomHit.points} in ${roomHit.name})`;
-        // Play coin sound
+
+        // Coin sound
         coinReceivedSnd.currentTime = 0;
         coinReceivedSnd.play();
-        // Remove that tool from array
-        tools.splice(toolIndex, 1);
+
+        // Remove that tool
+        tools.splice(index, 1);
       } else {
         // Miss => Game Over
-        tools.splice(toolIndex, 1);
+        tools.splice(index, 1);
         gameOver();
       }
     }
 
     // --------------------------------------------------
-    // 9. Crash Effects
+    // 9) Crash Effects
     // --------------------------------------------------
     function showCrashEffect(cx, cy) {
       const fw = fireImg.naturalWidth  * SCALE;
       const fh = fireImg.naturalHeight * SCALE;
-      const startTime = performance.now();
+      const now = performance.now();
 
       crashEffects.push({
         x: cx - fw / 2,
         y: cy - fh / 2,
         width: fw,
         height: fh,
-        endTime: startTime + CRASH_EFFECT_DURATION
+        endTime: now + CRASH_EFFECT_DURATION
       });
     }
 
     function updateCrashEffects() {
       const now = performance.now();
-      // Filter out expired effects
       crashEffects = crashEffects.filter(eff => now < eff.endTime);
     }
 
     // --------------------------------------------------
-    // 10. Main Update Loop
+    // 10) Main Game Loop
     // --------------------------------------------------
     function update() {
       if (gameActive) {
@@ -333,20 +406,19 @@
           jbX = canvas.width - jbWidth;
         }
 
-        // Update each tool
+        // Update tools
         for (let i = 0; i < tools.length; i++) {
           let t = tools[i];
-          if (t.falling) {
-            // Move it
-            t.y += TOOL_FALL_SPEED;
-            t.rotation += TOOL_ROT_SPEED;
+          if (!t.falling) continue;
 
-            // If it passes below the canvas => game over
-            if (t.y > canvas.height) {
-              tools.splice(i, 1);
-              gameOver();
-              break;
-            }
+          t.y += TOOL_FALL_SPEED;
+          t.rotation += TOOL_ROT_SPEED;
+
+          // If it goes below bottom => game over
+          if (t.y > canvas.height) {
+            tools.splice(i, 1);
+            gameOver();
+            break; // Stop updating more tools this frame
           }
         }
       }
@@ -355,25 +427,9 @@
       draw();
       requestAnimationFrame(update);
     }
-    requestAnimationFrame(update); // Kick off the loop
 
     // --------------------------------------------------
-    // 11. Game Over
-    // --------------------------------------------------
-    function gameOver() {
-      if (!gameActive) return; 
-      gameActive = false;
-
-      infoBoard.textContent = 'GAME OVER!';
-      gameOverSound.currentTime = 0;
-      gameOverSound.play();
-
-      // After 5s, restart
-      resetGame();
-    }
-
-    // --------------------------------------------------
-    // 12. Drawing
+    // 11) Draw
     // --------------------------------------------------
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -385,35 +441,42 @@
       ctx.drawImage(jbImg, jbX, jbY, jbWidth, jbHeight);
 
       // Tools
-      tools.forEach((tool) => {
+      for (let t of tools) {
         ctx.save();
-        const cx = tool.x + tool.width / 2;
-        const cy = tool.y + tool.height / 2;
+        const cx = t.x + t.width / 2;
+        const cy = t.y + t.height / 2;
         ctx.translate(cx, cy);
-        ctx.rotate(tool.rotation);
-        ctx.drawImage(toolImg, -tool.width/2, -tool.height/2, tool.width, tool.height);
+        ctx.rotate(t.rotation);
+        ctx.drawImage(toolImg, -t.width / 2, -t.height / 2, t.width, t.height);
         ctx.restore();
-      });
+      }
 
       // Crash Effects
-      crashEffects.forEach((eff) => {
+      for (let eff of crashEffects) {
         ctx.drawImage(fireImg, eff.x, eff.y, eff.width, eff.height);
-      });
-
-      // (Optional) Debug bounding boxes:
-      /*
-      ctx.save();
-      ctx.strokeStyle = 'rgba(255,0,0,0.5)';
-      rooms.forEach(r => {
-        ctx.strokeRect(r.x1, r.y1, r.x2-r.x1, r.y2-r.y1);
-      });
-      ctx.restore();
-      */
+      }
     }
 
     // --------------------------------------------------
-    // 13. Scale to Fit Window
+    // 12) Game Over
     // --------------------------------------------------
+    function gameOver() {
+      if (!gameActive) return;
+      gameActive = false;
+
+      infoBoard.textContent = 'GAME OVER!';
+      gameOverSound.currentTime = 0;
+      gameOverSound.play();
+
+      resetGame();
+    }
+
+    // --------------------------------------------------
+    // 13) Scale the Container to Fit
+    // --------------------------------------------------
+    window.addEventListener('resize', scaleToFit);
+    window.addEventListener('load', scaleToFit);
+
     function scaleToFit() {
       const containerWidth = 883;
       const containerHeight = 1250;
